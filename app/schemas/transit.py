@@ -45,6 +45,9 @@ class Line(BaseModel):
     avg_speed_kmh: float
     headway_s: float
     route_group: str | None = Field(None, description="Lines that are branches of one route share this")
+    service_days: list[int] | None = Field(None, description="Weekdays with service, 0 = Monday (from the timetable)")
+    service_start_s: float | None = Field(None, description="First departure, seconds after midnight")
+    service_end_s: float | None = Field(None, description="Last arrival; above 86400 means after midnight")
 
 
 class Network(BaseModel):
@@ -71,6 +74,8 @@ class Vehicle(BaseModel):
     headsign: str
     occupancy: Literal["low", "medium", "high", "unknown"] = "unknown"
     delay_s: int = 0
+    delay_source: Literal["live", "estimated", "none"] = Field("none", description="Where delay_s comes from")
+    position_source: Literal["gps", "timetable"] = Field("gps", description="'timetable' = estimated, not tracked")
     updated_at: float
 
 
@@ -123,3 +128,15 @@ class LineStatus(BaseModel):
     avg_delay_s: float
     effective_headway_s: float | None
     health: Literal["good", "minor_delays", "major_delays", "no_service"]
+
+
+class Alert(BaseModel):
+    """A line that is late or not running - what riders most want to know first."""
+
+    line_id: str
+    severity: Literal["minor", "major", "no_service"]
+    delay_s: int = 0
+    station_id: str | None = Field(None, description="Where the delay was seen, if known")
+    station_name: str | None = None
+    source: Literal["live", "estimated", "none"] = "none"
+    text: str

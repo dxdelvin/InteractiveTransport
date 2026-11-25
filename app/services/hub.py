@@ -37,6 +37,20 @@ class TransitHub:
     async def start(self) -> None:
         for pid in self.providers:
             self._tasks.append(asyncio.create_task(self._run(pid), name=f"provider:{pid}"))
+            if getattr(self.providers[pid], "delay_log", None):
+                self._tasks.append(asyncio.create_task(self._log_delays(pid), name=f"delaylog:{pid}"))
+
+    async def _log_delays(self, pid: str) -> None:
+        """Runs whether or not anyone is watching, so the punctuality log has no gaps."""
+        p = self.providers[pid]
+        while True:
+            try:
+                await p.log_tick()  # type: ignore[attr-defined]
+            except asyncio.CancelledError:
+                raise
+            except Exception as exc:
+                log.warning("%s delay log tick failed: %s", pid, exc)
+            await asyncio.sleep(self.settings.delay_log_interval_s)
 
     async def stop(self) -> None:
         for t in self._tasks:

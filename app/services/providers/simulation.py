@@ -1,7 +1,11 @@
 """Deterministic timetable simulation.
 
-Every line gets a fleet whose positions are a pure function of wall-clock time, so the
-simulation never drifts, survives restarts, and two clients always agree.
+Every line gets a fleet whose positions are a function of wall-clock time and delay, so
+the simulation never drifts, survives restarts, and two clients always agree.
+
+Delay comes from live departure data when a provider has it (``live_delay_s``) and from
+slow pseudo-noise otherwise. Either way it changes at most MAX_DELAY_RATE seconds per
+second, so a vehicle catching up with a new delay slows down instead of jumping back.
 
 Within a segment, trains follow  s(t) = d * (t - sin(2*pi*t) / (2*pi)),  which starts
 and ends at zero speed: they visibly accelerate out of stations and brake into them.
@@ -17,6 +21,7 @@ from app.schemas.transit import Line, Vehicle
 from app.services.geo import Polyline
 
 LAYOVER_S = 90.0
+MAX_DELAY_RATE = 0.6  # s of delay per s of clock; < 1 so vehicles never roll backwards
 
 
 def _ease(t: float) -> float:
@@ -97,6 +102,8 @@ class LineSimulation:
         self.poly = Polyline([tuple(c) for c in line.shape])
         self.seed = seed
         self.delay_profile = delay_profile
+        self.live_delay_s: float | None = None  # set by the provider from real departures
+        self._applied: dict[int, tuple[float, float]] = {}  # vehicle k -> (time, delay shown)
         speed = line.avg_speed_kmh / 3.6
         offs = line.station_offsets_m
         n = len(offs)
@@ -119,10 +126,23 @@ class LineSimulation:
             count = max(2, round(self.cycle / line.headway_s))
             self.fleet = [(-1, k * self.cycle / count) for k in range(count)]
 
-    def _delay(self, k: int, now: float) -> float:
+    def _target_delay(self, k: int, now: float) -> float:
+        if self.live_delay_s is not None:
+            return max(0.0, self.live_delay_s)
         raw = _noise(self.seed * 13 + k, now)
         # mostly on time, occasionally a few minutes behind
         return max(0.0, (raw - 0.35) * 420 * self.delay_profile)
+
+    def _delay(self, k: int, now: float) -> float:
+        target = self._target_delay(k, now)
+        prev = self._applied.get(k)
+        if prev is None or now < prev[0] or now - prev[0] > 900:
+            delay = target  # first sight (or clock jumped): no history to ease from
+        else:
+            step = MAX_DELAY_RATE * (now - prev[0])
+            delay = prev[1] + max(-step, min(step, target - prev[1]))
+        self._applied[k] = (now, delay)
+        return delay
 
     def _occupancy(self, k: int, now: float) -> str:
         hour = (time.localtime(now).tm_hour + time.localtime(now).tm_min / 60.0)
@@ -130,9 +150,25 @@ class LineSimulation:
         level = 0.35 + 0.55 * rush + 0.25 * _noise(self.seed + k * 7, now / 3)
         return "high" if level > 0.75 else "medium" if level > 0.45 else "low"
 
+    def running(self, now: float) -> bool:
+        """Whether the timetable has this line in service at local time `now`."""
+        line = self.line
+        if line.service_start_s is None or line.service_end_s is None:
+            return True
+        lt = time.localtime(now)
+        sec = lt.tm_hour * 3600 + lt.tm_min * 60 + lt.tm_sec
+        days = set(line.service_days) if line.service_days else set(range(7))
+        today, yesterday = lt.tm_wday, (lt.tm_wday - 1) % 7
+        # a service day can run past midnight (e.g. 25:30 for a night bus)
+        return (today in days and line.service_start_s <= sec <= line.service_end_s) or (
+            yesterday in days and line.service_start_s <= sec + 86400 <= line.service_end_s
+        )
+
     def vehicles(self, now: float) -> list[Vehicle]:
         line = self.line
         out: list[Vehicle] = []
+        if not self.running(now):
+            return out
         for k, (fixed_dir, phase0) in enumerate(self.fleet):
             delay = self._delay(k, now)
             c = (now - delay + phase0) % self.cycle
@@ -179,6 +215,8 @@ class LineSimulation:
                     headsign=headsign,
                     occupancy=self._occupancy(k, now),  # type: ignore[arg-type]
                     delay_s=int(delay),
+                    delay_source="live" if self.live_delay_s is not None else "estimated",
+                    position_source="timetable",
                     updated_at=now,
                 )
             )

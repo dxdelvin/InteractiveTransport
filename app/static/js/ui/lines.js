@@ -29,7 +29,9 @@ export function initLines(mapView) {
   function render() {
     const focus = state.focusLines;
     const byMode = new Map();
-    for (const s of statuses) {
+    const num = (s) => { const l = state.lines.get(s.line_id)?.short_name || s.line_id; return [parseInt(l, 10) || 9999, l]; };
+    const sorted = [...statuses].sort((a, b) => { const [x, xs] = num(a), [y, ys] = num(b); return x - y || xs.localeCompare(ys); });
+    for (const s of sorted) {
       if (!byMode.has(s.mode)) byMode.set(s.mode, []);
       byMode.get(s.mode).push(s);
     }
@@ -40,18 +42,20 @@ export function initLines(mapView) {
           ${lineBadge(s.line_id)}
           <div>
             <div class="line-ends">${ends(s.line_id)}</div>
-            <div class="line-state ${s.health}">${HEALTH[s.health]}${s.effective_headway_s && s.health !== "no_service" ? `, every ${Math.max(1, minutes(s.effective_headway_s))} min` : ""}</div>
+            <div class="line-state ${s.health}">${HEALTH[s.health]}${s.avg_delay_s >= 60 && s.health !== "good" ? ` (+${minutes(s.avg_delay_s)} min)` : ""}${s.effective_headway_s && s.health !== "no_service" ? `, every ${Math.max(1, minutes(s.effective_headway_s))} min` : ""}</div>
           </div>
           <div class="line-count"><b>${s.vehicles_active}</b>running</div>
-        </div>`).join("")}`).join("") + (focus ? `<button class="lines-reset" id="lines-all">Show every line</button>` : "");
+        </div>`).join("")}`).join("") + (focus ? `<button class="lines-reset" id="lines-all">Show every line</button>` : `<p class="lines-hint">Tap lines to highlight only those on the map.</p>`);
 
     box.querySelectorAll(".line-row").forEach((el) => {
+      // tap lines to build your own set (e.g. the ones near home); tap again to remove
       const pick = () => {
         const id = el.dataset.id;
-        const already = state.focusLines?.size === 1 && state.focusLines.has(id);
-        state.focusLines = already ? null : new Set([id]);
+        const set = new Set(state.focusLines || []);
+        set.has(id) ? set.delete(id) : set.add(id);
+        state.focusLines = set.size ? set : null;
         emit("focusLines");
-        if (!already) mapView.fitLines([id]);
+        if (set.size) mapView.fitLines([...set]);
       };
       el.addEventListener("click", pick);
       el.addEventListener("keydown", (e) => (e.key === "Enter" || e.key === " ") && (e.preventDefault(), pick()));
@@ -64,6 +68,13 @@ export function initLines(mapView) {
   }
 
   on("focusLines", render);
+  on("showLine", (id) => {
+    emit("view", "lines");
+    state.focusLines = new Set([id]);
+    emit("focusLines");
+    mapView.fitLines([id]);
+    requestAnimationFrame(() => box.querySelector(`[data-id="${CSS.escape(id)}"]`)?.scrollIntoView({ block: "nearest" }));
+  });
   on("networkLoaded", refresh);
   setInterval(refresh, 10000);
 }

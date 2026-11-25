@@ -76,7 +76,7 @@ export function initInspector(mapView) {
             <span><span class="eta" data-eta="${a.eta_s}">${eta(a.eta_s)}</span>${a.delay_s >= 60 ? `<span class="late">${Math.round(a.delay_s / 60)} min late</span>` : ""}</span>
           </li>`).join("") || `<li class="empty">No departures in the next hour.</li>`}
       </ul>
-      <div class="source">${d.source === "live" ? "Live times from bahnland-bayern.de" : "Times estimated from the vehicles on the map"}</div>
+      <div class="source">${d.source === "live" ? "<b>Live</b> times from bahnland-bayern.de" : "Estimated from the timetable. Live times aren't available right now."}</div>
       <div class="board-foot">
         <button data-from>Route from here</button>
         <button data-to>Route to here</button>
@@ -108,7 +108,7 @@ export function initInspector(mapView) {
       </div>
       <dl class="vstats">
         <div><dt>Speed</dt><dd>${Math.round(v.speed_kmh)} km/h</dd></div>
-        <div><dt>Timing</dt><dd class="${late ? "late" : ""}">${late ? `${Math.round(v.delay_s / 60)} min late` : "On time"}</dd></div>
+        <div><dt>Timing${v.delay_source === "estimated" ? " (est.)" : ""}</dt><dd class="${late ? "late" : ""}">${late ? `${Math.round(v.delay_s / 60)} min late` : "On time"}</dd></div>
         <div><dt>Load</dt><dd>${LOAD[v.occupancy] || "Unknown"}</dd></div>
       </dl>
       <div class="progress" title="How far along its run"><i style="width:${(d.progress * 100).toFixed(1)}%"></i></div>
@@ -118,6 +118,9 @@ export function initInspector(mapView) {
             <span class="pin"></span><span class="dest">${escapeHtml(u.name)}</span><span class="eta" data-eta="${u.eta_s}">${eta(u.eta_s)}</span>
           </li>`).join("") || `<li class="empty">Arriving at the last stop.</li>`}
       </ul>
+      <div class="source">${v.position_source === "timetable"
+        ? `Position estimated from the timetable${v.delay_source === "live" ? ", shifted by the line's <b>live</b> delay" : ""}. swa doesn't publish vehicle locations.`
+        : "<b>Live</b> GPS position"}</div>
       <div class="board-foot" id="follow-actions"></div>`;
     bindClose();
     el.querySelectorAll("[data-station]").forEach((li) => (li.onclick = () => emit("select", { kind: "station", id: li.dataset.station })));
@@ -130,14 +133,12 @@ export function initInspector(mapView) {
     if (!box) return;
     const f = state.follow;
     box.innerHTML = `
-      <button data-f="track" class="${f === "track" ? "on" : ""}">${f === "track" ? "Following" : "Follow"}</button>
-      <button data-f="cab" class="${f === "cab" ? "on" : ""}">Driver's view</button>
-      <button data-fly>Show on map</button>`;
+      <button data-f="track" class="${f === "track" ? "on" : ""}">${f === "track" ? "Following" : "Follow on map"}</button>
+      <button data-line>Show line ${escapeHtml(state.lines.get(state.vehicles.get(current.id)?.line_id)?.short_name || "")}</button>`;
     box.querySelectorAll("[data-f]").forEach((b) => (b.onclick = () => {
       state.follow = state.follow === b.dataset.f ? null : b.dataset.f;
-      if (!state.follow) mapView.map.easeTo({ pitch: mapView.is3D ? 55 : 0, duration: 800 });
       emit("follow", state.follow);
     }));
-    box.querySelector("[data-fly]").onclick = () => mapView.flyToVehicle(current.id);
+    box.querySelector("[data-line]").onclick = () => { const v = state.vehicles.get(current.id); if (v) mapView.fitLines([v.line_id]); };
   }
 }

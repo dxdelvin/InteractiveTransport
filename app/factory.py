@@ -36,6 +36,15 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         lifespan=lifespan,
     )
     app.add_middleware(GZipMiddleware, minimum_size=1024)
+
+    @app.middleware("http")
+    async def revalidate_static(request, call_next):
+        # no build step means no hashed file names: make browsers check for a newer
+        # version (cheap 304s via ETag) instead of running stale modules after an update
+        response = await call_next(request)
+        if request.url.path.startswith("/static/") or request.url.path == "/":
+            response.headers["Cache-Control"] = "no-cache"
+        return response
     app.include_router(api_router)
     app.include_router(ws_router)
 

@@ -44,3 +44,11 @@ def test_coordinates_origin_walks_first(planner):
 def test_unknown_stop(planner):
     with pytest.raises(PlanningError):
         _plan(planner, "Atlantis", "Königsplatz")
+
+
+def test_avoid_lines_puts_other_routes_first(planner):
+    normal = _plan(planner, "Hauptbahnhof", "Moritzplatz", alternatives=4).journeys
+    used = {l.line_id for l in normal[0].legs if l.kind == "ride"}
+    avoid = sorted(used)[:1]
+    js = _plan(planner, "Hauptbahnhof", "Moritzplatz", alternatives=4, avoid_lines=avoid).journeys
+    assert js and not any(l.line_id in avoid for l in js[0].legs)

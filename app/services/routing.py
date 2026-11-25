@@ -29,6 +29,7 @@ from app.services.geo import haversine_m
 from app.services.providers.base import TransitProvider
 
 WALK_SPEED_MPS = 1.3
+AVOID_PENALTY_S = 1800.0  # a line to avoid is still used if nothing else gets there
 WALK_DETOUR = 1.25  # street networks are not straight lines
 MAX_ACCESS_M = 1600.0
 MAX_TRANSFER_WALK_M = 450.0
@@ -68,6 +69,9 @@ class Planner:
         self.p = provider
         self.idx = provider._idx()
         self._predictions = self._build_predictions()
+        # lines the timetable has out of service right now (night and school buses by day)
+        running = {v.line_id for v in provider.vehicles.values()}
+        self._idle = set(self.idx.lines) - running if running else set()
         self._walk_links = self._build_walk_links()
 
     # ---- precomputation -------------------------------------------------------------
@@ -176,6 +180,8 @@ class Planner:
                         t = m / WALK_SPEED_MPS
                         push(_Label(cur.cost + t * w["walk"], cur.time + t, ("st", other), cur, {"type": "walk", "m": m, "s": t}, cur.boardings))
                 for lid in self.idx.stations[sid].lines:
+                    if use_live and lid in self._idle:
+                        continue
                     line = self.idx.lines[lid]
                     for i, s in enumerate(line.stations):
                         if s != sid:
@@ -327,8 +333,9 @@ class Planner:
         prefs: list[Preference] = [req.preference] + [p for p in ("fastest", "fewest_transfers", "least_walking") if p != req.preference]  # type: ignore[list-item]
         tag_for = {"fastest": "Fastest", "fewest_transfers": "Fewest transfers", "least_walking": "Least walking"}
         best_lines: list[str] = []
+        avoid = {lid: AVOID_PENALTY_S for lid in req.avoid_lines}
         for pref in prefs:
-            end = self._search(o_access, d_access, pref, req.use_live)
+            end = self._search(o_access, d_access, pref, req.use_live, avoid or None)
             if end is None:
                 continue
             j = self._to_journey(end, o_label, d_label, o_xy, d_xy)
@@ -338,7 +345,7 @@ class Planner:
 
         # an alternative that avoids the main line(s) of the best option
         if best_lines and len(journeys) < req.alternatives:
-            end = self._search(o_access, d_access, "fastest", req.use_live, {lid: 900.0 for lid in best_lines})
+            end = self._search(o_access, d_access, "fastest", req.use_live, {**{lid: 900.0 for lid in best_lines}, **avoid})
             if end is not None:
                 add(self._to_journey(end, o_label, d_label, o_xy, d_xy), "Alternative")
 
@@ -361,4 +368,8 @@ class Planner:
                 if "Fastest" in j.tags:
                     j.tags.remove("Fastest")
             journeys[0].tags.insert(0, "Fastest")
+        if req.avoid_lines:
+            # "find another way": trips without the avoided lines first, the rest as a fallback
+            avoided = set(req.avoid_lines)
+            journeys.sort(key=lambda j: any(l.line_id in avoided for l in j.legs))
         return PlanResponse(origin_label=o_label, destination_label=d_label, journeys=journeys[: req.alternatives])

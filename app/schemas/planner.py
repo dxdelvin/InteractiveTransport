@@ -30,6 +30,7 @@ class PlanRequest(BaseModel):
     preference: Preference = "fastest"
     alternatives: int = Field(3, ge=1, le=5)
     use_live: bool = Field(True, description="Use live vehicle positions for the first wait")
+    avoid_lines: list[str] = Field(default_factory=list, description="Lines to route around (e.g. a disrupted line)")
 
 
 class Leg(BaseModel):

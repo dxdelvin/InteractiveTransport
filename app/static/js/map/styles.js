@@ -1,7 +1,8 @@
-// Basemap styles in the "architectural model" look: pale stone ground, white massing,
-// soft blue rivers. Colour is reserved for the transit lines drawn on top.
+// Basemap styles: a light, legible street map. Streets, the Lech and Wertach, parks and
+// street names keep their real colours, softened so the transit lines stay the loudest
+// thing on the map.
 //
-//   osm:        OpenFreeMap "liberty" vector tiles, desaturated into the model palette at load time.
+//   osm:        OpenFreeMap "liberty" vector tiles, softened at load time.
 //   procedural: offline fallback - the backend's schematic city (rivers, parks, blocks).
 export const GLYPHS = "https://tiles.openfreemap.org/fonts/{fontstack}/{range}.pbf";
 export const FONT = ["Noto Sans Regular"];
@@ -9,15 +10,15 @@ export const FONT_BOLD = ["Noto Sans Bold"];
 const OSM_STYLE_URL = "https://tiles.openfreemap.org/styles/liberty";
 
 export const MODEL = {
-  ground: "#dfe3e6",
-  water: "#a9c9d8",
-  waterEdge: "#8fb5c7",
-  park: "#d2ddd1",
-  road: "#f7f8f8",
-  roadEdge: "#d3d8db",
-  building: "#eef0f1",
-  buildingTall: "#ffffff",
-  label: "#4f5860",
+  ground: "#eef0ee",
+  water: "#aed3e6",
+  waterEdge: "#8fbfd6",
+  park: "#d5e8cf",
+  road: "#ffffff",
+  roadEdge: "#d9dedb",
+  building: "#e2e5e3",
+  buildingTall: "#e2e5e3",
+  label: "#4c5752",
 };
 
 export function proceduralStyle() {
@@ -42,15 +43,7 @@ export function sceneryLayers() {
         "line-width": ["interpolate", ["exponential", 1.6], ["zoom"], 12, ["case", ["get", "major"], 1.2, 0.5], 17, ["case", ["get", "major"], 16, 9]],
       },
     },
-    {
-      id: "sc-buildings", type: "fill-extrusion", source: "scenery", filter: ["==", ["get", "kind"], "building"], minzoom: 12,
-      paint: {
-        "fill-extrusion-color": ["interpolate", ["linear"], ["get", "height"], 8, MODEL.building, 40, MODEL.buildingTall],
-        "fill-extrusion-height": ["interpolate", ["linear"], ["zoom"], 12, 0, 13.5, ["get", "height"]],
-        "fill-extrusion-opacity": 0.96,
-        "fill-extrusion-vertical-gradient": true,
-      },
-    },
+    { id: "sc-buildings", type: "fill", source: "scenery", filter: ["==", ["get", "kind"], "building"], minzoom: 13, paint: { "fill-color": MODEL.building, "fill-opacity": 0.8 } },
   ];
 }
 
@@ -105,18 +98,17 @@ function hslToRgb(h, s, l) {
   return [f(p, q, h + 1 / 3) * 255, f(p, q, h) * 255, f(p, q, h - 1 / 3) * 255];
 }
 
-/** Push any colour into the near-monochrome stone palette, keeping its relative lightness. */
+/** Soften a colour: keep its hue, take out some saturation, lift it toward white. */
 function modelColor(str, role) {
   const c = parseColor(str);
   if (!c) return str;
   const [h, s, l] = rgbToHsl(c[0], c[1], c[2]);
-  const hue = 0.57; // the slightly blue grey of the ground
-  let nl, ns = 0.06;
-  if (role === "text") { nl = 0.32 + l * 0.12; ns = 0.08; }
-  else if (role === "halo") { nl = 0.97; ns = 0.02; }
-  else if (role === "line") { nl = 0.82 + l * 0.16; }
-  else { nl = 0.84 + l * 0.08; ns = s * 0.12; }
-  const [r, g, b] = hslToRgb(hue * 0.8 + h * 0.2, ns, Math.min(0.99, nl));
+  let ns = s * 0.55, nl = l;
+  if (role === "text") { ns = s * 0.4; nl = Math.min(l, 0.42); }
+  else if (role === "halo") { ns = 0.05; nl = 0.98; }
+  else if (role === "line") { nl = l + (1 - l) * 0.25; }
+  else { nl = l + (1 - l) * 0.35; }
+  const [r, g, b] = hslToRgb(h, ns, Math.min(0.99, nl));
   return `rgba(${Math.round(r)},${Math.round(g)},${Math.round(b)},${c[3]})`;
 }
 
@@ -133,7 +125,8 @@ export async function osmModelStyle() {
   const res = await fetch(OSM_STYLE_URL, { signal: ctrl.signal }).finally(() => clearTimeout(timer));
   if (!res.ok) throw new Error(`HTTP ${res.status}`);
   const style = await res.json();
-  // keep streets, water, parks and place names; drop the clutter that competes with the network
+  // keep streets, street names, water, parks and place names; drop POI icons, 3D buildings
+  // and the basemap's own transit symbols, which would compete with ours
   style.layers = style.layers.filter((l) => l.type !== "fill-extrusion" && !(l.type === "symbol" && /poi|housenumber|aerialway|ferry|transit|railway|road_shield|highway-shield|oneway/.test(l.id)));
   for (const layer of style.layers) {
     const paint = (layer.paint ||= {});
@@ -145,19 +138,9 @@ export async function osmModelStyle() {
     if (layer.type === "background") paint["background-color"] = MODEL.ground;
     if (/water/.test(layer.id) && layer.type === "fill") paint["fill-color"] = MODEL.water;
     if (/water/.test(layer.id) && layer.type === "line") paint["line-color"] = MODEL.water;
-    if (/park|wood|grass|landcover|landuse_park/.test(layer.id) && layer.type === "fill") paint["fill-color"] = MODEL.park;
-    if (layer.type === "fill" && /building/.test(layer.id)) layer.layout = { ...(layer.layout || {}), visibility: "none" };
+    if (/park|wood|grass/.test(layer.id) && layer.type === "fill") paint["fill-color"] = MODEL.park;
+    if (layer.type === "fill" && /building/.test(layer.id)) { paint["fill-color"] = MODEL.building; paint["fill-outline-color"] = "#d4d8d6"; }
     if (layer.type === "symbol") paint["icon-opacity"] = 0;
   }
-  style.layers.push({
-    id: "osm-buildings", type: "fill-extrusion", source: "openmaptiles", "source-layer": "building", minzoom: 13,
-    paint: {
-      "fill-extrusion-color": ["interpolate", ["linear"], ["coalesce", ["get", "render_height"], 10], 8, MODEL.building, 40, MODEL.buildingTall],
-      "fill-extrusion-height": ["interpolate", ["linear"], ["zoom"], 13, 0, 14.5, ["coalesce", ["get", "render_height"], 10]],
-      "fill-extrusion-base": ["coalesce", ["get", "render_min_height"], 0],
-      "fill-extrusion-opacity": 0.96,
-      "fill-extrusion-vertical-gradient": true,
-    },
-  });
   return style;
 }

@@ -2,7 +2,7 @@
 
 This is a hand-built approximation of the network so the app runs out of the box.
 Stop positions are close to the real ones, but the routes are simplified and the line
-colours are approximations. For the exact network, drop the AVV/DELFI GTFS feed at
+colours follow swa (from OpenStreetMap). For the exact network, drop the AVV/DELFI GTFS feed at
 the path in AUGSBURG_GTFS_PATH and the provider will build everything from it instead.
 """
 from __future__ import annotations
@@ -48,26 +48,26 @@ STOPS: dict[str, tuple[str, float, float]] = {
 
 LINES: list[dict] = [
     # trams
-    {"id": "1", "name": "Tram 1", "color": "#D7262E", "mode": "tram", "speed": 20, "headway": 300,
+    {"id": "1", "name": "Tram 1", "color": "#E3000F", "mode": "tram", "speed": 20, "headway": 300,
      "stops": ["neuer-ostfriedhof", "schloessle", "jakobertor", "moritzplatz", "koenigsplatz", "goegginger-bruecke", "goeggingen"]},
-    {"id": "2", "name": "Tram 2", "color": "#F29400", "mode": "tram", "speed": 20, "headway": 300,
+    {"id": "2", "name": "Tram 2", "color": "#0068B3", "mode": "tram", "speed": 20, "headway": 300,
      "stops": ["augsburg-west", "kriegshaber", "staatstheater", "koenigsplatz", "theodor-heuss-platz", "rotes-tor",
                "haunstetter-strasse", "haunstetten-nord"]},
-    {"id": "3", "name": "Tram 3", "color": "#00965E", "mode": "tram", "speed": 21, "headway": 300,
+    {"id": "3", "name": "Tram 3", "color": "#EF7C00", "mode": "tram", "speed": 21, "headway": 300,
      "stops": ["stadtbergen", "pfersee", "hauptbahnhof", "koenigsplatz", "theodor-heuss-platz", "univiertel",
                "universitaet", "haunstetten-suedwest"]},
-    {"id": "4", "name": "Tram 4", "color": "#0069B4", "mode": "tram", "speed": 19, "headway": 450,
+    {"id": "4", "name": "Tram 4", "color": "#941680", "mode": "tram", "speed": 19, "headway": 450,
      "stops": ["oberhausen-nord", "oberhausen-bahnhof", "staatstheater", "koenigsplatz", "hauptbahnhof"]},
-    {"id": "6", "name": "Tram 6", "color": "#8E5BA6", "mode": "tram", "speed": 21, "headway": 450,
+    {"id": "6", "name": "Tram 6", "color": "#94C11C", "mode": "tram", "speed": 21, "headway": 450,
      "stops": ["friedberg-west", "hochzoll-mitte", "textilviertel", "jakobertor", "moritzplatz", "koenigsplatz", "hauptbahnhof"]},
     # buses
-    {"id": "21", "name": "Bus 21", "color": "#0098D4", "mode": "bus", "speed": 18, "headway": 600,
+    {"id": "21", "name": "Bus 21", "color": "#008B70", "mode": "bus", "speed": 18, "headway": 600,
      "stops": ["hauptbahnhof", "pfersee", "kriegshaber", "baerenkeller"]},
-    {"id": "23", "name": "Bus 23", "color": "#7AB51D", "mode": "bus", "speed": 18, "headway": 600,
+    {"id": "23", "name": "Bus 23", "color": "#ABCA97", "mode": "bus", "speed": 18, "headway": 600,
      "stops": ["moritzplatz", "rotes-tor", "herrenbach", "spickel", "messe"]},
-    {"id": "32", "name": "Bus 32", "color": "#C6007E", "mode": "bus", "speed": 19, "headway": 900,
+    {"id": "32", "name": "Bus 32", "color": "#3EA67B", "mode": "bus", "speed": 19, "headway": 900,
      "stops": ["inningen", "univiertel", "universitaet", "messe", "spickel", "hochzoll-mitte"]},
-    {"id": "41", "name": "Bus 41", "color": "#A0662D", "mode": "bus", "speed": 18, "headway": 900,
+    {"id": "41", "name": "Bus 41", "color": "#D35D03", "mode": "bus", "speed": 18, "headway": 900,
      "stops": ["firnhaberau", "lechhausen", "jakobertor", "moritzplatz", "staatstheater", "oberhausen-bahnhof"]},
 ]
 

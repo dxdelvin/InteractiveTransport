@@ -46,9 +46,33 @@ export function initPlanner(mapView) {
 
   document.getElementById("from-gps").onclick = () => locateUser(mapView, (lat, lon, label) => setPlace("origin", { lat, lon, label }, label));
 
-  on("planFrom", (s) => { setPlace("origin", { station_id: s.id }, s.name); emit("tab", "plan"); toIn.focus(); maybeGo(); });
-  on("planTo", (s) => { setPlace("destination", { station_id: s.id }, s.name); emit("tab", "plan"); if (!state.origin) fromIn.focus(); maybeGo(); });
+  let avoid = [];
+  on("planFrom", (s) => { avoid = []; setPlace("origin", { station_id: s.id }, s.name); emit("view", "route"); toIn.focus(); maybeGo(); });
+  on("planTo", (s) => { avoid = []; setPlace("destination", { station_id: s.id }, s.name); emit("view", "route"); prefillOrigin(); if (!state.origin) fromIn.focus(); maybeGo(); });
+  on("planTrip", ({ origin, originLabel, destination, destinationLabel }) => {
+    avoid = [];
+    if (origin) setPlace("origin", origin, originLabel);
+    setPlace("destination", destination, destinationLabel);
+    emit("view", "route");
+    maybeGo();
+  });
+  // a disrupted line: same trip, routed around it
+  on("planAlternative", ({ origin, originLabel, destination, destinationLabel, avoid: lines }) => {
+    setPlace("origin", origin, originLabel);
+    setPlace("destination", destination, destinationLabel);
+    avoid = lines;
+    emit("view", "route");
+    maybeGo();
+  });
+  on("view", (v) => { if (v === "route") prefillOrigin(); });
+  function prefillOrigin() {
+    if (state.origin) return;
+    if (state.userLocation) setPlace("origin", { lat: state.userLocation.lat, lon: state.userLocation.lon, label: "Your location" }, "Your location");
+    else if (state.anchor) setPlace("origin", { lat: state.anchor.lat, lon: state.anchor.lon, label: state.anchor.label }, state.anchor.label);
+  }
   function maybeGo() { if (state.origin && state.destination) form.requestSubmit(); }
+  fromIn.addEventListener("input", () => (avoid = []));
+  toIn.addEventListener("input", () => (avoid = []));
 
   form.addEventListener("submit", async (e) => {
     e.preventDefault();
@@ -60,8 +84,8 @@ export function initPlanner(mapView) {
     go.textContent = "Finding routes";
     try {
       const pref = form.querySelector("input[name=pref]:checked").value;
-      const res = await api.plan(state.provider.id, { origin: state.origin, destination: state.destination, preference: pref, alternatives: 4 });
-      showJourneys(res.journeys);
+      const res = await api.plan(state.provider.id, { origin: state.origin, destination: state.destination, preference: pref, alternatives: 4, avoid_lines: avoid });
+      showJourneys(res.journeys, avoid);
     } catch (err) {
       emit("toast", { text: err.message, error: true });
     } finally {
@@ -85,7 +109,7 @@ export function initPlanner(mapView) {
     const ex = EXAMPLES[state.provider?.id] || [];
     results.innerHTML = `
       <div class="intro">
-        <p>Type two stops, pick points on the map, or start from where you are. Waiting times come from the vehicles you can see moving.</p>
+        <p>Type two stops, pick points on the map, or start from where you are. The first wait comes from the next real departure.</p>
         ${ex.length ? `<div class="try">${ex.map(([a, b]) => `<button type="button" data-a="${escapeHtml(a)}" data-b="${escapeHtml(b)}">${escapeHtml(a)} to ${escapeHtml(b)}</button>`).join("")}</div>` : ""}
       </div>`;
     results.querySelectorAll(".try button").forEach((b) => (b.onclick = () => {
@@ -95,11 +119,12 @@ export function initPlanner(mapView) {
     }));
   }
 
-  function showJourneys(journeys) {
+  function showJourneys(journeys, avoided = []) {
     plannedAt = Date.now();
     state.journeys = journeys;
     if (!journeys.length) return clearResults();
-    results.innerHTML = journeys.map((j, i) => card(j, i)).join("");
+    const note = avoided.length ? `<p class="intro" style="padding-bottom:0">Routes that avoid ${avoided.map((id) => lineBadge(id)).join(" ")} where another way is reasonable.</p>` : "";
+    results.innerHTML = note + journeys.map((j, i) => card(j, i)).join("");
     results.querySelectorAll(".journey").forEach((el) => {
       el.addEventListener("click", (e) => {
         if (e.target.closest("[data-track]")) return;
@@ -167,33 +192,20 @@ export function initPlanner(mapView) {
 }
 
 export function locateUser(mapView, done) {
-  const fallback = (reason) => {
-    // Outside the network area (or no permission): start near a random stop instead,
-    // so the feature can still be tried.
-    const stations = [...state.stations.values()];
-    const s = stations[Math.floor(Math.random() * stations.length)];
-    const lat = s.lat + (Math.random() - 0.5) * 0.008, lon = s.lon + (Math.random() - 0.5) * 0.01;
-    emit("toast", { text: `${reason} Starting you near ${s.name} instead.` });
-    finish(lat, lon, "Your location (simulated)");
-  };
-  const finish = (lat, lon, label) => {
-    state.userLocation = { lat, lon };
-    mapView.setUserLocation(lat, lon);
-    done?.(lat, lon, label);
-  };
-  if (!navigator.geolocation) return fallback("Location isn't available in this browser.");
+  if (!navigator.geolocation) return emit("toast", { text: "This browser can't share your location. Type a stop instead." });
   navigator.geolocation.getCurrentPosition(
     (pos) => {
       const { latitude: lat, longitude: lon } = pos.coords;
       const [w, s, e, n] = state.network.bbox;
-      const inside = lon > w - 0.05 && lon < e + 0.05 && lat > s - 0.05 && lat < n + 0.05;
-      if (!inside) {
+      if (!(lon > w - 0.05 && lon < e + 0.05 && lat > s - 0.05 && lat < n + 0.05)) {
         const km = Math.round(haversine([lon, lat], state.provider.center) / 1000);
-        return fallback(`You're about ${km} km from ${state.provider.city}.`);
+        return emit("toast", { text: `You're about ${km} km from ${state.provider.city}. Type a stop to start from instead.` });
       }
-      finish(lat, lon, "Your location");
+      state.userLocation = { lat, lon };
+      mapView.setUserLocation(lat, lon);
+      done?.(lat, lon, "Your location");
     },
-    () => fallback("Location permission was denied."),
+    () => emit("toast", { text: "Location is blocked for this site. Allow it in the browser, or type a stop." }),
     { enableHighAccuracy: true, timeout: 8000 },
   );
 }

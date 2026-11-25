@@ -1,4 +1,4 @@
-// App bootstrap: wires the map, realtime feed and UI panels together.
+// App bootstrap: wires the map, realtime feed and panel together.
 import { api } from "./core/api.js";
 import { state, emit, on } from "./core/store.js";
 import { LineGeometry } from "./core/geo.js";
@@ -9,6 +9,8 @@ import { initPlanner } from "./ui/planner.js";
 import { initLines } from "./ui/lines.js";
 import { initAssistant } from "./ui/assistant.js";
 import { initInspector } from "./ui/inspector.js";
+import { initHome } from "./ui/home.js";
+import { initSearch } from "./ui/search.js";
 
 const $ = (id) => document.getElementById(id);
 
@@ -19,16 +21,25 @@ initPlanner(mapView);
 initLines(mapView);
 initAssistant();
 initInspector(mapView);
+initHome(mapView);
+initSearch(mapView);
 
-// ---------------------------------------------------------------- realtime
+// ---------------------------------------------------------------- realtime + honesty line
 const connState = { status: "connecting", count: 0 };
 function paintConn(detail) {
   const { status, count } = connState;
   const ok = status === "live" || status === "polling";
+  const estimated = state.provider?.kind === "simulated";
   const noun = state.provider?.id === "augsburg" ? "trams and buses" : "vehicles";
-  $("hud-conn-label").textContent = ok ? `${count} ${noun} moving` : status === "error" ? "Positions paused" : status === "reconnecting" ? "Reconnecting" : "Connecting";
-  $("hud-conn").className = `conn ${ok ? "ok" : status === "error" ? "bad" : ""}`;
-  $("hud-conn").title = detail || (state.provider?.kind === "live" ? "Live vehicle positions" : "Positions follow the timetable");
+  $("hud-conn-label").textContent = ok
+    ? `${count} ${noun}${estimated ? "" : " tracked live"}`
+    : status === "error" ? "Positions paused" : status === "reconnecting" ? "Reconnecting" : "Connecting";
+  $("hud-conn").className = `conn ${ok ? (estimated ? "est" : "ok") : status === "error" ? "bad" : ""}`;
+  $("hud-conn").title = detail || "";
+  const liveDelays = [...state.vehicles.values()].some((v) => v.delay_source === "live");
+  $("data-note").textContent = !ok ? "" : estimated
+    ? (liveDelays ? "Estimated positions, live delays" : "Estimated positions from the timetable")
+    : "GPS positions from the operator";
 }
 const realtime = new Realtime({
   onSnapshot(snap) {
@@ -36,6 +47,7 @@ const realtime = new Realtime({
     mapView.updateVehicles(snap.vehicles);
     connState.count = snap.vehicles.length;
     paintConn();
+    emit("vehiclesUpdated");
   },
   onStatus(status, detail) {
     connState.status = status;
@@ -50,7 +62,7 @@ async function loadProvider(id) {
   const loader = $("loader");
   loader.classList.remove("done");
   loader.querySelector(".loader-word").textContent = info.city;
-  loader.querySelector(".loader-text").textContent = info.kind === "live" ? `Connecting to the ${info.city} live feed` : "Putting the trams on the tracks";
+  loader.querySelector(".loader-text").textContent = info.kind === "live" ? `Connecting to the ${info.city} live feed` : "Loading trams and buses";
   emit("select", null);
   state.follow = null;
   state.focusLines = null;
@@ -61,19 +73,17 @@ async function loadProvider(id) {
     state.lines = new Map(network.lines.map((l) => [l.id, { ...l, geom: new LineGeometry(l.shape, l.loop) }]));
     state.stations = new Map(network.stations.map((s) => [s.id, s]));
     state.vehicles = new Map();
+    state.userLocation = null;
     history.replaceState(null, "", `#${info.id}`);
 
     document.querySelectorAll("#city-switch button").forEach((b) => b.setAttribute("aria-current", String(b.dataset.id === info.id)));
-    const trams = network.lines.filter((l) => l.mode === "tram").length, buses = network.lines.filter((l) => l.mode === "bus").length;
     $("city-name").textContent = info.city;
-    $("city-sub").textContent = trams || buses
-      ? `${trams} tram and ${buses} bus lines`
-      : `${network.lines.length} lines, live positions`;
     $("attribution").textContent = info.attribution;
     emit("providerChanged", info);
 
     await mapView.loadProvider(info, network);
     realtime.connect(info.id);
+    showView("home");
     emit("networkLoaded");
   } catch (e) {
     emit("toast", { text: `Couldn't load ${info.name}: ${e.message}`, error: true, ms: 8000 });
@@ -97,49 +107,63 @@ on("select", (sel) => {
   mapView.select(sel);
 });
 
-// ---------------------------------------------------------------- tabs & panel
-function setTab(name) {
-  document.querySelectorAll(".mode").forEach((t) => t.classList.toggle("active", t.dataset.tab === name));
-  document.querySelectorAll(".pane").forEach((b) => b.classList.toggle("active", b.dataset.body === name));
+// ---------------------------------------------------------------- views & sheet
+function showView(name) {
+  document.querySelectorAll(".view").forEach((v) => v.classList.toggle("active", v.dataset.view === name));
   $("side").classList.remove("collapsed");
+  if (name === "home" && state.journeys.length) { state.journeys = []; mapView.showJourney(null); }
+  if (name === "home" && state.focusLines && !state.selection) { state.focusLines = null; emit("focusLines"); }
 }
-document.querySelectorAll(".mode").forEach((t) => (t.onclick = () => setTab(t.dataset.tab)));
-on("tab", setTab);
+on("view", showView);
+document.querySelectorAll("[data-back]").forEach((b) => (b.onclick = () => showView("home")));
+document.querySelectorAll("[data-go]").forEach((b) => (b.onclick = () => showView(b.dataset.go)));
 $("side-collapse").onclick = () => $("side").classList.add("collapsed");
 $("side-open").onclick = () => $("side").classList.remove("collapsed");
+// phones: the sheet peeks at half height; the handle (or focusing search) expands it
+$("grab").onclick = () => $("side").classList.toggle("full");
+on("sheetFull", (full) => window.innerWidth < 820 && $("side").classList.toggle("full", full));
+on("select", (sel) => sel && window.innerWidth < 820 && $("side").classList.remove("full"));
 
-// ---------------------------------------------------------------- view controls
-const controls = $("controls");
-const toggles = { buildings: true, labels: true };
-controls.addEventListener("click", (e) => {
+// ---------------------------------------------------------------- mode filter
+state.modes = new Set(["tram", "bus"]);
+document.querySelectorAll("#mode-filter button").forEach((b) => (b.onclick = () => {
+  const m = b.dataset.mode;
+  // never hide everything: turning off the last mode switches to the other one
+  if (state.modes.has(m) && state.modes.size === 1) state.modes = new Set(["tram", "bus"].filter((x) => x !== m));
+  else state.modes.has(m) ? state.modes.delete(m) : state.modes.add(m);
+  document.querySelectorAll("#mode-filter button").forEach((x) => x.setAttribute("aria-pressed", String(state.modes.has(x.dataset.mode))));
+  mapView.setModes(state.modes);
+}));
+on("providerChanged", () => {
+  const modes = new Set(state.network.lines.map((l) => l.mode));
+  $("mode-filter").hidden = !(modes.has("tram") && modes.has("bus"));
+  state.modes = modes;
+  document.querySelectorAll("#mode-filter button").forEach((x) => x.setAttribute("aria-pressed", "true"));
+});
+
+// ---------------------------------------------------------------- map controls
+$("controls").addEventListener("click", (e) => {
   const b = e.target.closest("button");
-  if (!b) return;
-  act(b.dataset.act);
+  if (b) act(b.dataset.act);
 });
 function act(name) {
-  const btn = controls.querySelector(`[data-act="${name}"]`);
-  if (name === "3d") { mapView.set3D(!mapView.is3D); btn.classList.toggle("on", mapView.is3D); }
-  if (name === "orbit") mapView.setOrbit(!mapView.orbit);
-  if (name === "buildings") { toggles.buildings = !toggles.buildings; mapView.setLayerVisible(["sc-buildings", "osm-buildings"], toggles.buildings); btn.classList.toggle("on", toggles.buildings); }
-  if (name === "labels") { toggles.labels = !toggles.labels; mapView.setLayerVisible(["stations-label"], toggles.labels); btn.classList.toggle("on", toggles.labels); }
+  if (name === "zoom-in") mapView.zoomBy(1);
+  if (name === "zoom-out") mapView.zoomBy(-1);
+  if (name === "locate") { showView("home"); emit("locate"); }
   if (name === "reset") { state.focusLines = null; emit("focusLines"); mapView.resetView(); }
+  if (name === "city") { const on3d = mapView.setCityView(!mapView.cityView); $("controls").querySelector('[data-act="city"]').classList.toggle("on", on3d); }
 }
-on("orbit", (o) => controls.querySelector('[data-act="orbit"]').classList.toggle("on", o));
 
 document.addEventListener("keydown", (e) => {
   if (e.target.matches("input, textarea")) return;
   const k = e.key.toLowerCase();
   if (k === "escape") { mapView.setPickMode(null); emit("select", null); }
-  else if (k === "3") act("3d");
-  else if (k === "o") act("orbit");
-  else if (k === "b") act("buildings");
-  else if (k === "l") act("labels");
   else if (k === "r") act("reset");
-  else if (k === "/") { e.preventDefault(); setTab("plan"); $("from-input").focus(); }
+  else if (k === "/") { e.preventDefault(); $("omni-input").focus(); }
   else if (k === "f" && state.selection?.kind === "vehicle") { state.follow = state.follow ? null : "track"; emit("follow", state.follow); }
 });
 
-// ---------------------------------------------------------------- HUD clock
+// ---------------------------------------------------------------- clock
 const tickClock = () => ($("hud-clock").textContent = new Date().toLocaleTimeString("de-DE", { hour: "2-digit", minute: "2-digit" }));
 setInterval(tickClock, 5000);
 tickClock();

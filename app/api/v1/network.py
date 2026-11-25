@@ -3,7 +3,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query
 from fastapi.responses import JSONResponse
 
 from app.api.deps import get_provider
-from app.schemas.transit import LineStatus, Network, Station, StationDetail
+from app.schemas.transit import Alert, LineStatus, Network, Station, StationDetail
 from app.services.providers.base import TransitProvider
 
 router = APIRouter(prefix="/{provider}", tags=["network"])
@@ -22,6 +22,21 @@ async def scenery(p: TransitProvider = Depends(get_provider)) -> JSONResponse:
 @router.get("/lines/status", response_model=list[LineStatus])
 async def lines_status(p: TransitProvider = Depends(get_provider)) -> list[LineStatus]:
     return [p.line_status(lid) for lid in p._idx().lines]
+
+
+@router.get("/alerts", response_model=list[Alert])
+async def alerts(p: TransitProvider = Depends(get_provider)) -> list[Alert]:
+    """Late and idle lines, worst first. `source` says whether a delay is live or estimated."""
+    return p.alerts()
+
+
+@router.get("/punctuality")
+async def punctuality(days: float = Query(30, gt=0, le=366), p: TransitProvider = Depends(get_provider)) -> dict:
+    """Punctuality per line from the local delay log (DELAY_LOG_ENABLED=true)."""
+    dl = getattr(p, "delay_log", None)
+    if dl is None:
+        raise HTTPException(404, "The delay log is off. Set DELAY_LOG_ENABLED=true and restart to start collecting.")
+    return dl.summary(days, set(p._idx().lines))
 
 
 @router.get("/lines/{line_id}/status", response_model=LineStatus)

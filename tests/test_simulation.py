@@ -44,3 +44,26 @@ def test_search_handles_umlauts_and_typos(augsburg):
     assert augsburg.search_stations("konigsplatz")[0].id == "koenigsplatz"
     assert augsburg.search_stations("Gögg")[0].id in {"goeggingen", "goegginger-bruecke"}
     assert augsburg.search_stations("hauptbanhof")[0].id == "hauptbahnhof"
+
+
+def test_live_delay_is_eased_in(augsburg):
+    """A new live delay is applied gradually: the fleet slows down, it never jumps back."""
+    sim = augsburg._sims[0]
+    t0 = 1_760_000_000.0
+    sim.live_delay_s = None
+    sim._applied.clear()
+    before = {v.id: v for v in sim.vehicles(t0)}
+    sim.live_delay_s = 600.0
+    for step in range(1, 60):
+        cur = {v.id: v for v in sim.vehicles(t0 + step)}
+        for vid, v in cur.items():
+            p = before[vid]
+            if p.direction == v.direction:
+                moved = v.shape_dist_m - p.shape_dist_m
+                assert (moved if v.direction == 0 else -moved) > -0.5, vid
+        before = cur
+    v = next(iter(before.values()))
+    assert v.delay_source == "live" and v.position_source == "timetable"
+    assert 0 < v.delay_s < 600  # still catching up
+    sim.live_delay_s = None
+    sim._applied.clear()

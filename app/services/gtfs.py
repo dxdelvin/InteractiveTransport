@@ -40,6 +40,15 @@ SPEED = {"tram": 20.0, "bus": 18.0, "metro": 32.0, "rail": 55.0}
 COLOR = {"tram": "#D7262E", "bus": "#0098D4", "metro": "#0069B4", "rail": "#5A6670"}
 
 
+def _secs(hms: str) -> float | None:
+    """GTFS time (may exceed 24:00:00) -> seconds after midnight."""
+    try:
+        h, m, sec = hms.strip().split(":")
+        return int(h) * 3600 + int(m) * 60 + int(sec)
+    except ValueError:
+        return None
+
+
 class _Feed:
     def __init__(self, path: Path):
         self.path = path
@@ -107,10 +116,22 @@ def load_gtfs_network(
         raise ValueError("GTFS feed has no trips for the requested modes")
 
     seqs: dict[str, list[tuple[int, str]]] = defaultdict(list)
+    window: dict[str, list[float]] = {}  # route -> [first departure, last arrival] in seconds
     for r in feed.rows("stop_times.txt"):
         tid = r["trip_id"]
         if tid in trips:
             seqs[tid].append((int(r["stop_sequence"]), r["stop_id"]))
+            t = _secs(r.get("departure_time") or r.get("arrival_time") or "")
+            if t is not None:
+                w = window.setdefault(trips[tid][0], [t, t])
+                w[0], w[1] = min(w[0], t), max(w[1], t)
+
+    # weekdays each route runs on, from calendar.txt (calendar_dates exceptions are ignored)
+    day_cols = ("monday", "tuesday", "wednesday", "thursday", "friday", "saturday", "sunday")
+    service_days = {r["service_id"]: {i for i, c in enumerate(day_cols) if r.get(c) == "1"} for r in feed.rows("calendar.txt")}
+    route_days: dict[str, set[int]] = defaultdict(set)
+    for route_id, _, _, service in trips.values():
+        route_days[route_id] |= service_days.get(service, set(range(7)))
 
     patterns: dict[tuple[str, int], Counter] = defaultdict(Counter)
     example: dict[tuple, str] = {}
@@ -178,6 +199,8 @@ def load_gtfs_network(
         headway = min(3600.0, max(180.0, 17 * 3600 / per_day)) if per_day else 1200.0
         color = route.get("route_color") or ""
         text = route.get("route_text_color") or ""
+        loop = len(key) > 3 and key[0] == key[-1]
+        st_ids, st_coords = (list(key[:-1]), coords[:-1]) if loop else (list(key), coords)
         lines.append(
             build_line(
                 line_id=line_id,
@@ -186,14 +209,22 @@ def load_gtfs_network(
                 color=f"#{color}" if color else COLOR[mode],
                 text_color=f"#{text}" if text else "#ffffff",
                 mode=mode,
-                station_ids=list(key),
-                station_coords=coords,
+                station_ids=st_ids,
+                station_coords=st_coords,
                 shape=shape,
+                loop=loop,
                 avg_speed_kmh=SPEED[mode],
                 headway_s=round(headway),
                 route_group=route_id,
             )
         )
+
+    for line in lines:
+        rid = line.route_group or ""
+        if rid in window:
+            line.service_start_s, line.service_end_s = window[rid]
+        if service_days and route_days.get(rid):
+            line.service_days = sorted(route_days[rid])
 
     served: dict[str, list[str]] = defaultdict(list)
     for line in lines:

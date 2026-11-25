@@ -17,6 +17,7 @@ import unicodedata
 from dataclasses import dataclass
 
 from app.schemas.transit import (
+    Alert,
     Arrival,
     Line,
     LineStatus,
@@ -374,6 +375,41 @@ class TransitProvider(abc.ABC):
             effective_headway_s=headway,
             health=health,  # type: ignore[arg-type]
         )
+
+    def delay_station(self, line_id: str) -> str | None:
+        """Station where a line's delay was observed (providers with live boards override)."""
+        return None
+
+    def alerts(self) -> list[Alert]:
+        """Late or idle lines, worst first. Thresholds match line_status."""
+        idx = self._idx()
+        out: list[Alert] = []
+        for line in idx.lines.values():
+            vs = [v for v in self.vehicles.values() if v.line_id == line.id]
+            label = f"{'Bus' if line.mode == 'bus' else 'Tram' if line.mode == 'tram' else 'Line'} {line.short_name}"
+            if not vs:
+                out.append(Alert(line_id=line.id, severity="no_service", text=f"{label} is not running now"))
+                continue
+            worst = max(vs, key=lambda v: v.delay_s)
+            if worst.delay_s < 120:
+                continue
+            sid = self.delay_station(line.id) or worst.next_station_id or worst.current_station_id
+            st = idx.stations.get(sid) if sid else None
+            mins = round(worst.delay_s / 60)
+            out.append(
+                Alert(
+                    line_id=line.id,
+                    severity="major" if worst.delay_s >= 300 else "minor",
+                    delay_s=worst.delay_s,
+                    station_id=st.id if st else None,
+                    station_name=st.name if st else None,
+                    source=worst.delay_source,
+                    text=f"{label} +{mins} min" + (f" at {st.name}" if st else ""),
+                )
+            )
+        rank = {"major": 0, "minor": 1, "no_service": 2}
+        out.sort(key=lambda a: (rank[a.severity], -a.delay_s))
+        return out
 
     def station_distance(self, a: str, b: str) -> float:
         idx = self._idx()

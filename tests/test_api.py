@@ -68,3 +68,11 @@ def test_websocket_stream(client):
 
 def test_unknown_provider(client):
     assert client.get("/api/v1/nowhere/network").status_code == 404
+
+
+def test_alerts(client):
+    rows = client.get("/api/v1/augsburg/alerts").json()
+    assert isinstance(rows, list)
+    for a in rows:
+        assert a["severity"] in {"minor", "major", "no_service"} and a["text"]
+        assert a["source"] in {"live", "estimated", "none"}

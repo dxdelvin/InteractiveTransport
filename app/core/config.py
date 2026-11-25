@@ -34,6 +34,11 @@ class Settings(BaseSettings):
     augsburg_radius_m: float = 12_000
     efa_enabled: bool = True
     efa_base_url: str = "https://bahnland-bayern.de/efa"
+    # Punctuality log: keep sampling live boards in the background and store every delay
+    delay_log_enabled: bool = False
+    delay_log_path: str = "app/data/delays.sqlite"
+    delay_log_interval_s: float = 120.0
+    delay_log_stations_per_tick: int = 6
 
     # AI assistant (OpenAI)
     openai_api_key: str = ""

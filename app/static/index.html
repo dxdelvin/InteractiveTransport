@@ -4,7 +4,7 @@
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
   <title>Augsburg in Motion</title>
-  <meta name="description" content="Trams and buses in Augsburg on a live 3D map, with route planning and a trip assistant." />
+  <meta name="description" content="Trams and buses in Augsburg on a live map: next departures near you, delays, and trip planning." />
   <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Ccircle cx='16' cy='16' r='14' fill='%23FFD100' stroke='%2300704A' stroke-width='3'/%3E%3Cpath d='M11 9v14M21 9v14M11 16h10' stroke='%2300704A' stroke-width='3.4' fill='none'/%3E%3C/svg%3E" />
   <link rel="preconnect" href="https://fonts.googleapis.com" />
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
@@ -12,18 +12,19 @@
   <link rel="stylesheet" href="https://unpkg.com/maplibre-gl@4.7.1/dist/maplibre-gl.css" />
   <link rel="stylesheet" href="/static/css/app.css" />
   <script src="https://unpkg.com/maplibre-gl@4.7.1/dist/maplibre-gl.js"></script>
-  <script type="importmap">
-    { "imports": { "three": "https://cdn.jsdelivr.net/npm/three@0.160.0/build/three.module.js" } }
-  </script>
 </head>
 <body>
   <div id="map" aria-label="Map of trams and buses"></div>
 
-  <aside class="sheet" id="side" aria-label="Trip planner">
+  <aside class="sheet" id="side" aria-label="Departures and trip planner">
+    <button class="grab" id="grab" aria-label="Expand panel"><i></i></button>
     <header class="sheet-head">
       <div>
         <h1 class="city" id="city-name">Augsburg</h1>
-        <p class="city-sub"><span id="city-sub">Loading the network</span><br /><span class="conn" id="hud-conn"><i></i><span id="hud-conn-label">Connecting</span></span></p>
+        <p class="city-sub">
+          <span class="conn" id="hud-conn"><i></i><span id="hud-conn-label">Connecting</span></span>
+          <span class="data-note" id="data-note"></span>
+        </p>
       </div>
       <time class="clock" id="hud-clock">--:--</time>
       <button class="sheet-toggle" id="side-collapse" aria-label="Hide panel" title="Hide panel">
@@ -31,65 +32,85 @@
       </button>
     </header>
 
-    <nav class="modes" role="tablist">
-      <button class="mode active" data-tab="plan" role="tab">Route</button>
-      <button class="mode" data-tab="lines" role="tab">Lines</button>
-      <button class="mode" data-tab="ai" role="tab">Ask <span class="ai-engine" id="ai-engine"></span></button>
-    </nav>
+    <form class="omni" id="omni" autocomplete="off" role="search">
+      <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="11" cy="11" r="6.5"/><path d="M16 16l4.5 4.5"/></svg>
+      <input id="omni-input" placeholder="Stop, line or question" aria-label="Search a stop or line, or ask a question" maxlength="300" />
+      <button type="button" class="omni-clear" id="omni-clear" aria-label="Clear" hidden><svg viewBox="0 0 24 24"><path d="M6 6l12 12M18 6L6 18"/></svg></button>
+      <div class="omni-list" id="omni-list" role="listbox" hidden></div>
+    </form>
 
-    <section class="pane active" data-body="plan">
-      <form class="plan" id="plan-form" autocomplete="off">
-        <div class="field">
-          <span class="stop-mark from" aria-hidden="true"></span>
-          <input id="from-input" placeholder="From" aria-label="From" />
-          <button type="button" class="tool" id="from-gps" title="Use my location" aria-label="Use my location"><svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="3.5"/><path d="M12 2v4M12 18v4M2 12h4M18 12h4"/></svg></button>
-          <button type="button" class="tool" id="from-pick" title="Choose on the map" aria-label="Choose start on the map"><svg viewBox="0 0 24 24"><path d="M12 21s-7-6.2-7-11a7 7 0 0 1 14 0c0 4.8-7 11-7 11z"/></svg></button>
-        </div>
-        <button type="button" class="swap" id="swap" title="Swap start and destination" aria-label="Swap start and destination"><svg viewBox="0 0 24 24"><path d="M8 4v16m0 0l-3-3m3 3l3-3M16 20V4m0 0l-3 3m3-3l3 3"/></svg></button>
-        <div class="field">
-          <span class="stop-mark to" aria-hidden="true"></span>
-          <input id="to-input" placeholder="To" aria-label="To" />
-          <button type="button" class="tool" id="to-pick" title="Choose on the map" aria-label="Choose destination on the map"><svg viewBox="0 0 24 24"><path d="M12 21s-7-6.2-7-11a7 7 0 0 1 14 0c0 4.8-7 11-7 11z"/></svg></button>
-        </div>
-        <fieldset class="prefs">
-          <legend class="sr">Preference</legend>
-          <label><input type="radio" name="pref" value="fastest" checked /><span>Fastest</span></label>
-          <label><input type="radio" name="pref" value="fewest_transfers" /><span>Fewest changes</span></label>
-          <label><input type="radio" name="pref" value="least_walking" /><span>Least walking</span></label>
-        </fieldset>
-        <button class="go" type="submit" id="plan-go">Find routes</button>
-      </form>
-      <div class="results" id="plan-results"></div>
-    </section>
+    <div class="views">
+      <section class="view active" data-view="home">
+        <div class="alerts top" id="alerts" aria-live="polite"></div>
+        <div class="nearby" id="nearby"></div>
+        <div class="alerts" id="alerts-minor"></div>
+        <nav class="quick">
+          <button data-go="route"><svg viewBox="0 0 24 24"><circle cx="6" cy="18" r="2.5"/><circle cx="18" cy="6" r="2.5"/><path d="M8.5 18H15a3 3 0 0 0 0-6H9a3 3 0 0 1 0-6h6.5"/></svg>Plan a trip</button>
+          <button data-go="lines"><svg viewBox="0 0 24 24"><path d="M4 7h16M4 12h16M4 17h10"/></svg>All lines</button>
+        </nav>
+      </section>
 
-    <section class="pane" data-body="lines">
-      <div class="line-groups" id="line-list"></div>
-    </section>
+      <section class="view" data-view="route">
+        <div class="view-head"><button class="back" data-back aria-label="Back"><svg viewBox="0 0 24 24"><path d="M15 6l-6 6 6 6"/></svg></button><h2>Plan a trip</h2></div>
+        <form class="plan" id="plan-form" autocomplete="off">
+          <div class="field">
+            <span class="stop-mark from" aria-hidden="true"></span>
+            <input id="from-input" placeholder="From" aria-label="From" />
+            <button type="button" class="tool" id="from-gps" title="Use my location" aria-label="Use my location"><svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="3.5"/><path d="M12 2v4M12 18v4M2 12h4M18 12h4"/></svg></button>
+            <button type="button" class="tool" id="from-pick" title="Choose on the map" aria-label="Choose start on the map"><svg viewBox="0 0 24 24"><path d="M12 21s-7-6.2-7-11a7 7 0 0 1 14 0c0 4.8-7 11-7 11z"/></svg></button>
+          </div>
+          <button type="button" class="swap" id="swap" title="Swap start and destination" aria-label="Swap start and destination"><svg viewBox="0 0 24 24"><path d="M8 4v16m0 0l-3-3m3 3l3-3M16 20V4m0 0l-3 3m3-3l3 3"/></svg></button>
+          <div class="field">
+            <span class="stop-mark to" aria-hidden="true"></span>
+            <input id="to-input" placeholder="To" aria-label="To" />
+            <button type="button" class="tool" id="to-pick" title="Choose on the map" aria-label="Choose destination on the map"><svg viewBox="0 0 24 24"><path d="M12 21s-7-6.2-7-11a7 7 0 0 1 14 0c0 4.8-7 11-7 11z"/></svg></button>
+          </div>
+          <fieldset class="prefs">
+            <legend class="sr">Preference</legend>
+            <label><input type="radio" name="pref" value="fastest" checked /><span>Fastest</span></label>
+            <label><input type="radio" name="pref" value="fewest_transfers" /><span>Fewest changes</span></label>
+            <label><input type="radio" name="pref" value="least_walking" /><span>Least walking</span></label>
+          </fieldset>
+          <button class="go" type="submit" id="plan-go">Find routes</button>
+        </form>
+        <div class="results" id="plan-results"></div>
+      </section>
 
-    <section class="pane" data-body="ai">
-      <div class="chat" id="chat"></div>
-      <div class="suggest" id="suggest"></div>
-      <form class="ask" id="chat-form" autocomplete="off">
-        <input id="chat-text" placeholder="Ask about a trip, a stop or a line" aria-label="Your question" maxlength="2000" />
-        <button type="submit">Send</button>
-      </form>
-    </section>
+      <section class="view" data-view="lines">
+        <div class="view-head"><button class="back" data-back aria-label="Back"><svg viewBox="0 0 24 24"><path d="M15 6l-6 6 6 6"/></svg></button><h2>Lines</h2></div>
+        <div class="line-groups" id="line-list"></div>
+      </section>
+
+      <section class="view" data-view="ask">
+        <div class="view-head"><button class="back" data-back aria-label="Back"><svg viewBox="0 0 24 24"><path d="M15 6l-6 6 6 6"/></svg></button><h2>Answer</h2><span class="ai-engine" id="ai-engine"></span></div>
+        <div class="chat" id="chat"></div>
+        <form class="ask" id="chat-form" autocomplete="off">
+          <input id="chat-text" placeholder="Ask a follow-up" aria-label="Your question" maxlength="2000" />
+          <button type="submit">Send</button>
+        </form>
+      </section>
+    </div>
 
     <footer class="sheet-foot">
       <span id="attribution"></span>
       <span class="cities" id="city-switch"></span>
     </footer>
   </aside>
-  <button class="sheet-open" id="side-open" aria-label="Show panel">Plan a trip</button>
+  <button class="sheet-open" id="side-open" aria-label="Show panel">Departures</button>
 
   <aside class="board" id="inspector" hidden aria-live="polite"></aside>
 
+  <div class="mode-filter" id="mode-filter" role="group" aria-label="Show on map">
+    <button data-mode="tram" aria-pressed="true"><i class="sq"></i>Trams</button>
+    <button data-mode="bus" aria-pressed="true"><i class="rd"></i>Buses</button>
+  </div>
+
   <div class="controls" id="controls" aria-label="Map view">
-    <button data-act="3d" class="on" title="Tilt the map (3)">3D</button>
-    <button data-act="orbit" title="Slowly circle the city (O)" aria-label="Circle the city"><svg viewBox="0 0 24 24"><path d="M20 12a8 8 0 1 1-2.4-5.7"/><path d="M20 4v5h-5"/></svg></button>
-    <button data-act="buildings" class="on" title="Buildings (B)" aria-label="Buildings"><svg viewBox="0 0 24 24"><path d="M4 21V9l5-3v15M9 21V4l9 4v13M2 21h20"/></svg></button>
-    <button data-act="labels" class="on" title="Stop names (L)" aria-label="Stop names"><svg viewBox="0 0 24 24"><path d="M5 7h14M5 12h9M5 17h11"/></svg></button>
-    <button data-act="reset" title="Whole city (R)" aria-label="Show the whole city"><svg viewBox="0 0 24 24"><path d="M4 9V4h5M20 9V4h-5M4 15v5h5M20 15v5h-5"/></svg></button>
+    <button data-act="zoom-in" title="Zoom in" aria-label="Zoom in"><svg viewBox="0 0 24 24"><path d="M12 5v14M5 12h14"/></svg></button>
+    <button data-act="zoom-out" title="Zoom out" aria-label="Zoom out"><svg viewBox="0 0 24 24"><path d="M5 12h14"/></svg></button>
+    <button data-act="locate" title="Near me" aria-label="Show what's near me"><svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="3.5"/><path d="M12 2v4M12 18v4M2 12h4M18 12h4"/></svg></button>
+    <button data-act="reset" title="Whole network (R)" aria-label="Show the whole network"><svg viewBox="0 0 24 24"><path d="M4 9V4h5M20 9V4h-5M4 15v5h5M20 15v5h-5"/></svg></button>
+    <button data-act="city" class="city-btn" title="City view: Augsburg in 3D" aria-label="City view in 3D">3D</button>
   </div>
 
   <div class="pick-hint" id="pick-hint" hidden>Click the map to set your <b id="pick-which">start</b>. Press Esc to cancel.</div>
@@ -98,7 +119,7 @@
   <div class="loader" id="loader">
     <div class="loader-word">Augsburg</div>
     <div class="loader-rail"><i></i></div>
-    <div class="loader-text">Putting the trams on the tracks</div>
+    <div class="loader-text">Loading trams and buses</div>
   </div>
 
   <script type="module" src="/static/js/main.js"></script>

@@ -8,3 +8,5 @@ venv/
 *.log
 
 app/data/gtfs/*.zip
+app/data/*.sqlite
+.playwright-mcp/
